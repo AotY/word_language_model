@@ -9,7 +9,7 @@ python generate.py \
     --outf ./data/generated.txt
     --words 35 \
     --seed 7 \
-    --cuda \
+    --device cuda \
     --log-interval 100 \
     --temperature 1.0
 

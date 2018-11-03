@@ -4,7 +4,6 @@ import time
 import math
 import torch
 import torch.nn as nn
-from torch.autograd import Variable
 
 import data
 import model
@@ -52,8 +51,8 @@ parser.add_argument('--tied', action='store_true',
 parser.add_argument('--seed', type=int, default=1111,
                     help='random seed')
 
-parser.add_argument('--cuda', action='store_true',
-                    help='use CUDA')
+parser.add_argument('--device', type=str,
+                    help='use CUDA or CPU')
 
 parser.add_argument('--log-interval', type=int, default=200, metavar='N',
                     help='report interval')
@@ -61,18 +60,13 @@ parser.add_argument('--log-interval', type=int, default=200, metavar='N',
 parser.add_argument('--save', type=str,  default='model.pt',
                     help='path to save the final model')
 
-# args 包含所有参数
 args = parser.parse_args()
 
 
 # Set the random seed manually for reproducibility.
 torch.manual_seed(args.seed)
 
-if torch.cuda.is_available():
-    if not args.cuda:
-        print("WARNING: You have a CUDA device, so you should probably run with --cuda")
-    else:
-        torch.cuda.manual_seed(args.seed)
+device = torch.device(args.device)
 
 ###############################################################################
 # Load data
@@ -106,9 +100,7 @@ def batchify(data, bsz):
     ''' A tensor must be contiguous() to be viewed.'''
     data = data.view(bsz, -1).t().contiguous()
 
-    if args.cuda:
-        data = data.cuda()
-
+    data = data.to(device)
     return data
 
 eval_batch_size = 10
@@ -122,21 +114,13 @@ test_data = batchify(corpus.test, eval_batch_size)
 
 ntokens = len(corpus.dictionary)
 model = model.RNNModel(args.model, ntokens, args.emsize, args.nhid, args.nlayers, args.dropout, args.tied)
-if args.cuda:
-    model.cuda()
+model = model.to(device)
 
 criterion = nn.CrossEntropyLoss()
 
 ###############################################################################
 # Training code
 ###############################################################################
-
-def repackage_hidden(h):
-    """Wraps hidden states in new Variables, to detach them from their history."""
-    if type(h) == Variable:
-        return Variable(h.data)
-    else:
-        return tuple(repackage_hidden(v) for v in h)
 
 
 # get_batch subdivides the source data into chunks of length args.bptt.
@@ -151,23 +135,24 @@ def repackage_hidden(h):
 
 def get_batch(source, i, evaluation=False):
     seq_len = min(args.bptt, len(source) - 1 - i)
-    data = Variable(source[i:i+seq_len], volatile=evaluation)
-    target = Variable(source[i+1:i+1+seq_len].view(-1))
+    data = source[i:i+seq_len]
+    target = (source[i+1:i+1+seq_len].view(-1))
     return data, target
 
 
 def evaluate(data_source):
     # Turn on evaluation mode which disables dropout.
     model.eval()
-    total_loss = 0
-    ntokens = len(corpus.dictionary)
-    hidden = model.init_hidden(eval_batch_size)
-    for i in range(0, data_source.size(0) - 1, args.bptt):
-        data, targets = get_batch(data_source, i, evaluation=True)
-        output, hidden = model(data, hidden)
-        output_flat = output.view(-1, ntokens)
-        total_loss += len(data) * criterion(output_flat, targets).data
-        hidden = repackage_hidden(hidden)
+    with torch.no_grad():
+        total_loss = 0
+        ntokens = len(corpus.dictionary)
+        hidden = model.init_hidden(eval_batch_size)
+        for i in range(0, data_source.size(0) - 1, args.bptt):
+            data, targets = get_batch(data_source, i, evaluation=True)
+            output, hidden = model(data, hidden)
+            output_flat = output.view(-1, ntokens)
+            total_loss += len(data) * criterion(output_flat, targets).data
+            hidden = repackage_hidden(hidden)
     return total_loss[0] / len(data_source)
 
 

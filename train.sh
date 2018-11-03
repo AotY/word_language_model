@@ -16,7 +16,7 @@ python main.py \
     --dropout 0.8 \
     --tied \
     --seed 7 \
-    --cuda \
+    --device cuda \
     --log-interval 100 \
     --save ./models
 
