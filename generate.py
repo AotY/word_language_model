@@ -58,21 +58,17 @@ model.eval()
 corpus = data.Corpus(args.data)
 ntokens = len(corpus.dictionary)
 
-hidden = model.init_hidden(1)
 input = torch.rand(1, 1).mul(ntokens).long().to(device)
-
-if args.cuda:
-    input.data = input.data.cuda()
 
 sentence1 = ''
 sentence2 = ''
 
 with torch.no_grad():
+    hidden = model.init_hidden(1)
     with open(args.outf, 'w') as outf:
         for i in range(args.words):
             # model(input, hidden) --> forward(self, input, hidden):
             output, hidden = model(input, hidden)
-            print(output.shape) #[1, 1, vocab_size]
 
             # squeeze() -- Returns a Tensor with all the dimensions of input of size 1 removed.
             # exp() 求指数，默认是以e（2.718）为底。
@@ -84,13 +80,13 @@ with torch.no_grad():
             # 全部填充为word_idx值，也就是下一次输出的word_idx
             input.data.fill_(word_idx)
             word = corpus.dictionary.idx2word[word_idx]
-            sentence1 += word
+            sentence1 += word + ' '
 
             outf.write(word + ('\n' if i % 20 == 19 else ' '))
 
             output_softmax = torch.softmax(output, dim=2)
-            word_idx = output.softmax(dim=2).item()
-            sentence2 += corpus.dictionary.idx2word[word_idx]
+            word_idx = output.softmax(dim=2).argmax(dim=2).item()
+            sentence2 += corpus.dictionary.idx2word[word_idx] + ' '
 
             if i % args.log_interval == 0:
                 print('| Generated {}/{} words'.format(i, args.words))
@@ -118,30 +114,32 @@ beam_width = 64
 best_n = 5
 node_queue = Queue()
 
+
+del hidden
 with torch.no_grad():
+    hidden = model.init_hidden(1)
     # init
     output, hidden = model(input, hidden)
     output_softmax = torch.softmax(output, dim=2)
-    log_probs, next_inputs = output_softmax.topk(2, beam_width) #[1, 1, beam_width]
+    log_probs, next_inputs = output_softmax.topk(beam_width, 2) #[1, 1, beam_width]
     next_inputs = next_inputs.squeeze(0)
-    next_hiddens = hidden.repeat(1, beam_width, 1) #[layers, beam_width, hidden_size]
-
+    next_hiddens = tuple([h.repeat(1, beam_width, 1) for h in hidden]) #[layers, beam_width, hidden_size]
     node_list = []
     for word_idx, log_prob in zip(next_inputs.view(-1).tolist(), log_probs.view(-1).tolist()):
         node = BeamNode()
         node.push(word_idx, log_prob)
         node_list.append(node)
 
-    node_queue.put(node_queue)
+    node_queue.put(node_list)
 
     for i in range(args.words):
         outputs, hiddens = model(next_inputs, next_hiddens)
         outputs_softmax = torch.softmax(outputs, dim=2) #[1, beam_width, vocab_size]
-        log_probs, next_inputs = output_softmax.view(-1).topk(0, beam_width)
+        log_probs, next_inputs = output_softmax.view(-1).topk(beam_width, 0)
 
         last_node_list = node_queue.get()
         cur_node_list = []
-        for log_prob, index in zip(log_probs, next_inputs):
+        for log_prob, index in zip(log_probs.view(-1).tolist(), next_inputs.view(-1).tolist()):
             last_i = index // outputs.size(2)
             word_idx = index % outputs.size(2)
 
@@ -152,6 +150,7 @@ with torch.no_grad():
 
         node_queue.put(cur_node_list)
         del last_node_list
+        next_inputs = next_inputs.view(1, -1)
 
 
 final_node_list = node_queue.get()
@@ -165,7 +164,7 @@ for node in final_node_list:
 sentences = sorted(tmp_sentences, key=lambda item: item[0], reverse=True)
 sentences = [ids for _, ids in sentences]
 
-for ids in sentences:
+for ids in sentences[:best_n]:
     sentence = ' '.join([corpus.dictionary.idx2word[id] for id in ids])
     print(sentence)
 

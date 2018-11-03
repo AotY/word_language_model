@@ -18,7 +18,7 @@ python main.py \
     --seed 7 \
     --device cuda \
     --log-interval 100 \
-    --save ./models \
+    --save ./models/model.pth \
     --epochs 40
 
 /

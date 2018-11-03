@@ -5,8 +5,8 @@ export CUDA_VISIBLE_DEVICES=4
 
 python generate.py \
     --data ./data/wikitext-2/ \
-    --checkpoint ./models/model.pt \
-    --outf ./data/generated.txt
+    --checkpoint ./models/model.pth \
+    --outf ./data/generated.txt \
     --words 35 \
     --seed 7 \
     --device cuda \

@@ -1,4 +1,6 @@
 .idea
 *.pyc
 __pycache__
-
+*.pt
+*.pth
+models/
