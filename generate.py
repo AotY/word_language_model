@@ -9,9 +9,9 @@
 import argparse
 
 import torch
-from torch.autograd import Variable
 
 import data
+from queue import Queue
 
 parser = argparse.ArgumentParser(description='PyTorch Wikitext-2 Language Model')
 
@@ -66,7 +66,6 @@ if args.cuda:
 
 sentence1 = ''
 sentence2 = ''
-sentence3 = ''
 
 with torch.no_grad():
     with open(args.outf, 'w') as outf:
@@ -89,7 +88,7 @@ with torch.no_grad():
 
             outf.write(word + ('\n' if i % 20 == 19 else ' '))
 
-            output_softmax = torch.softmax(output)
+            output_softmax = torch.softmax(output, dim=2)
             word_idx = output.softmax(dim=2).item()
             sentence2 += corpus.dictionary.idx2word[word_idx]
 
@@ -97,5 +96,80 @@ with torch.no_grad():
                 print('| Generated {}/{} words'.format(i, args.words))
 
 print('sentence1: %s' % sentence1)
-print('sentence2: %s' % sentence2)
-print('sentence3: %s' % sentence3)
+print('greedy sentence2: %s' % sentence2)
+
+
+print("""beam search""")
+class BeamNode:
+    def __init__(self):
+        self.sentence = ''
+        self.log_prob = 0.0
+
+    def push(self, word_idx, log_prob):
+        self.sentence += str(word_idx) + ','
+        self.log_prob += log_prob
+
+    def get_ids(self):
+        return [int(item) for item in self.sentence[:-1].split(',')]
+
+
+
+beam_width = 64
+best_n = 5
+node_queue = Queue()
+
+with torch.no_grad():
+    # init
+    output, hidden = model(input, hidden)
+    output_softmax = torch.softmax(output, dim=2)
+    log_probs, next_inputs = output_softmax.topk(2, beam_width) #[1, 1, beam_width]
+    next_inputs = next_inputs.squeeze(0)
+    next_hiddens = hidden.repeat(1, beam_width, 1) #[layers, beam_width, hidden_size]
+
+    node_list = []
+    for word_idx, log_prob in zip(next_inputs.view(-1).tolist(), log_probs.view(-1).tolist()):
+        node = BeamNode()
+        node.push(word_idx, log_prob)
+        node_list.append(node)
+
+    node_queue.put(node_queue)
+
+    for i in range(args.words):
+        outputs, hiddens = model(next_inputs, next_hiddens)
+        outputs_softmax = torch.softmax(outputs, dim=2) #[1, beam_width, vocab_size]
+        log_probs, next_inputs = output_softmax.view(-1).topk(0, beam_width)
+
+        last_node_list = node_queue.get()
+        cur_node_list = []
+        for log_prob, index in zip(log_probs, next_inputs):
+            last_i = index // outputs.size(2)
+            word_idx = index % outputs.size(2)
+
+            node = BeamNode()
+            node.push(last_node_list[last_i].sentence + str(word_idx), log_prob)
+
+            cur_node_list.append(node)
+
+        node_queue.put(cur_node_list)
+        del last_node_list
+
+
+final_node_list = node_queue.get()
+
+tmp_sentences = []
+for node in final_node_list:
+    ids = node.get_ids()
+    score = node.log_prob / len(ids)
+    tmp_sentences.append((score, ids))
+
+sentences = sorted(tmp_sentences, key=lambda item: item[0], reverse=True)
+sentences = [ids for _, ids in sentences]
+
+for ids in sentences:
+    sentence = ' '.join([corpus.dictionary.idx2word[id] for id in ids])
+    print(sentence)
+
+
+
+
+
