@@ -2,9 +2,6 @@
 # Language Modeling on Penn Tree Bank
 #
 # This file generates new sentences sampled from the language model
-#
-#
-###############################################################################
 
 import argparse
 
@@ -91,9 +88,6 @@ with torch.no_grad():
             if i % args.log_interval == 0:
                 print('| Generated {}/{} words'.format(i, args.words))
 
-print('sentence1: %s' % sentence1)
-print('greedy sentence2: %s' % sentence2)
-
 
 print("""beam search""")
 class BeamNode:
@@ -110,10 +104,11 @@ class BeamNode:
 
 
 
-beam_width = 64
-best_n = 5
+beam_width = 128
+best_n = 12
 node_queue = Queue()
 
+res = []
 
 del hidden
 with torch.no_grad():
@@ -133,41 +128,64 @@ with torch.no_grad():
     node_queue.put(node_list)
 
     for i in range(args.words):
-        outputs, hiddens = model(next_inputs, next_hiddens)
+        outputs, hiddens = model(next_inputs, next_hiddens) # outputs: [1, beam_width, vocab_size]
         outputs_softmax = torch.softmax(outputs, dim=2) #[1, beam_width, vocab_size]
-        log_probs, next_inputs = output_softmax.view(-1).topk(beam_width, 0)
+        log_probs, indices = outputs_softmax.view(-1).topk(beam_width, 0)
 
         last_node_list = node_queue.get()
         cur_node_list = []
-        for log_prob, index in zip(log_probs.view(-1).tolist(), next_inputs.view(-1).tolist()):
-            last_i = index // outputs.size(2)
+
+        next_inputs = []
+        next_indices = []
+        for j, (log_prob, index) in enumerate(zip(log_probs.view(-1).tolist(), indices.view(-1).tolist())):
+            last_j = index // outputs.size(2)
             word_idx = index % outputs.size(2)
 
-            node = BeamNode()
-            node.push(last_node_list[last_i].sentence + str(word_idx), log_prob)
+            if word_idx == corpus.dictionary.word2idx['<eos>']:
+                tmp_ids = last_node_list[last_j].get_ids()
+                tmp_score = last_node_list[last_j].log_prob / len(tmp_ids)
+                res.append((tmp_score, tmp_ids))
+                beam_width -= 1
+                continue
 
-            cur_node_list.append(node)
+            tmp_node = BeamNode()
+            tmp_node.push(last_node_list[last_j].sentence + str(word_idx), log_prob)
+            cur_node_list.append(tmp_node)
+
+            next_inputs.append(word_idx)
+            next_indices.append(j)
 
         node_queue.put(cur_node_list)
         del last_node_list
-        next_inputs = next_inputs.view(1, -1)
+
+        next_inputs = torch.tensor(next_inputs, dtype=torch.long, device=device).view(1, -1)
+
+        if len(next_indices) != outputs.size(1):
+            next_indices = torch.tensor(next_indices, dtype=torch.long, device=device).view(-1)
+            next_hiddens = tuple([item.index_select(dim=1, index=next_indices) for item in hiddens])
+        else:
+            next_hiddens = hiddens
 
 
+print('queue size: %d' % node_queue.qsize())
 final_node_list = node_queue.get()
 
-tmp_sentences = []
 for node in final_node_list:
     ids = node.get_ids()
     score = node.log_prob / len(ids)
-    tmp_sentences.append((score, ids))
+    res.append((score, ids))
 
-sentences = sorted(tmp_sentences, key=lambda item: item[0], reverse=True)
+sentences = sorted(res, key=lambda item: item[0], reverse=True)
 sentences = [ids for _, ids in sentences]
+print(sentences)
 
-for ids in sentences[:best_n]:
+for i, ids in enumerate(sentences[:best_n]):
     sentence = ' '.join([corpus.dictionary.idx2word[id] for id in ids])
-    print(sentence)
+    print('best %d : %s ' % (i, sentence))
 
+print('---------------------')
+print('sentence1: %s' % sentence1)
+print('greedy sentence2: %s' % sentence2)
 
 
 
